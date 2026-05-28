@@ -1,10 +1,6 @@
-
-from heapq import merge
-from hmac import new
 import os
-from pickletools import read_unicodestring1
 import regex as re
-
+from .pretokenization_example import find_chunk_boundaries
 
 
 def is_best_pair_matched (
@@ -59,23 +55,34 @@ def train_bpe (
     vocab[256]=b"<|endoftext|>"
 
     #print(vocab)
-
-    merges = []
-    with open(input_path,"rb") as f :
-        text = f.read()
-        flag = re.escape(special_tokens[0])
-        chunks = re.split(flag.encode("utf-8"),text)
-        
-    #print (len(chunks))
     freq_dict = {}
-    for chunk in chunks :
-        str_chunk = chunk.decode("utf-8")
-        tokens_of_one_chunk = re.findall(PAT,str_chunk)
+    merges = []
+    # with open(input_path,"rb") as f :
+    #     text = f.read()
+    #     flag = re.escape(special_tokens[0])
+    #     chunks = re.split(flag.encode("utf-8"),text)
     
-        for token in tokens_of_one_chunk:
-            bytes_token = token.encode('utf-8')
-            words = tuple(bytes([x]) for x in bytes_token)
-            freq_dict[words] = freq_dict.get(words,0) + 1
+    with open(input_path, "rb") as f:
+        num_processes = 4
+        boundaries = find_chunk_boundaries(f, num_processes, b"<|endoftext|>")
+
+        # The following is a serial implementation, but you can parallelize this
+        # by sending each start/end pair to a set of processes.
+        for start, end in zip(boundaries[:-1], boundaries[1:]):
+            f.seek(start)
+            text = f.read(end - start)
+            flag = re.escape(special_tokens[0])
+            chunks = re.split(flag.encode("utf-8"),text)
+
+            for chunk in chunks :
+                str_chunk = chunk.decode("utf-8")
+
+                tokens_of_one_chunk = re.findall(PAT,str_chunk)
+            
+                for token in tokens_of_one_chunk:
+                    bytes_token = token.encode('utf-8')
+                    words = tuple(bytes([x]) for x in bytes_token)
+                    freq_dict[words] = freq_dict.get(words,0) + 1
             
     #print ("freq",freq)
 
