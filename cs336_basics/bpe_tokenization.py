@@ -2,16 +2,10 @@
 import os
 import regex as re
 from .pretokenization_example import find_chunk_boundaries
+from multiprocessing import Pool
 
-def is_best_pair_matched (
-    word : tuple[bytes],
-    best_pair : tuple[bytes]
-) -> bool :
-    for i in range(len(word)-1):
-        pair = (word[i],word[i+1])
-        if pair == best_pair :
-            return True        
-    return False
+PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+
 
 def make_a_new_word (
     word : tuple[bytes],
@@ -38,6 +32,32 @@ def make_a_new_word (
     return tuple(new_word) 
 
 
+def worker(task) :
+    #print("task",task)
+    input_path = task["input_path"]
+    start = task["start"]
+    end = task["end"]
+    special_tokens = task["special_tokens"]
+
+
+    freq_dict = {}
+    with open(input_path, "rb") as f:
+        f.seek(start)
+        text = f.read(end - start)
+        flag = re.escape(special_tokens[0])
+        chunks = re.split(flag.encode("utf-8"),text)
+
+        for chunk in chunks :
+            str_chunk = chunk.decode("utf-8")
+
+            tokens_of_one_chunk = re.findall(PAT,str_chunk)
+            
+            for token in tokens_of_one_chunk:
+                bytes_token = token.encode('utf-8')
+                words = tuple(bytes([x]) for x in bytes_token)
+                freq_dict[words] = freq_dict.get(words,0) + 1
+    return freq_dict
+
 def train_bpe (
     input_path: str | os.PathLike,
     vocab_size: int,
@@ -45,7 +65,7 @@ def train_bpe (
     **kwargs,
 ) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
     # print("train_bpe 111111", input_path, vocab_size, special_tokens, **kwargs)
-    PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+    
     
 
     vocab = {}
@@ -54,6 +74,7 @@ def train_bpe (
     vocab[256]=b"<|endoftext|>"
 
     #print(vocab)
+    freq_dict_list = []
     freq_dict = {}
     merges = []
     # with open(input_path,"rb") as f :
@@ -62,27 +83,44 @@ def train_bpe (
     #     chunks = re.split(flag.encode("utf-8"),text)
     
     with open(input_path, "rb") as f:
-        num_processes = 4
+        num_processes = 8
         boundaries = find_chunk_boundaries(f, num_processes, b"<|endoftext|>")
 
         # The following is a serial implementation, but you can parallelize this
         # by sending each start/end pair to a set of processes.
+        # for start, end in zip(boundaries[:-1], boundaries[1:]):
+        #     f.seek(start)
+        #     text = f.read(end - start)
+        #     flag = re.escape(special_tokens[0])
+        #     chunks = re.split(flag.encode("utf-8"),text)
+
+        #     for chunk in chunks :
+        #         str_chunk = chunk.decode("utf-8")
+
+        #         tokens_of_one_chunk = re.findall(PAT,str_chunk)
+            
+        #         for token in tokens_of_one_chunk:
+        #             bytes_token = token.encode('utf-8')
+        #             words = tuple(bytes([x]) for x in bytes_token)
+        #             freq_dict[words] = freq_dict.get(words,0) + 1
+
+        task_list=[]
         for start, end in zip(boundaries[:-1], boundaries[1:]):
-            f.seek(start)
-            text = f.read(end - start)
-            flag = re.escape(special_tokens[0])
-            chunks = re.split(flag.encode("utf-8"),text)
+            task_list.append({
+                "input_path" : input_path,
+                "start" : start,
+                "end" : end,
+                "special_tokens": special_tokens
+            })
 
-            for chunk in chunks :
-                str_chunk = chunk.decode("utf-8")
-
-                tokens_of_one_chunk = re.findall(PAT,str_chunk)
-            
-                for token in tokens_of_one_chunk:
-                    bytes_token = token.encode('utf-8')
-                    words = tuple(bytes([x]) for x in bytes_token)
-                    freq_dict[words] = freq_dict.get(words,0) + 1
-            
+    with Pool(num_processes) as p:
+        for d in p.imap(worker,task_list):
+            for k,v in d.items() :
+                freq_dict[k]=freq_dict.get(k,0)+v
+    
+    
+           
+        
     #print ("freq",freq)
 
     # 基于freq表，计算每个字符组合出现的次数
