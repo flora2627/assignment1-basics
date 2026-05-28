@@ -1,7 +1,7 @@
+
 import os
 import regex as re
 from .pretokenization_example import find_chunk_boundaries
-
 
 def is_best_pair_matched (
     word : tuple[bytes],
@@ -36,8 +36,7 @@ def make_a_new_word (
 
     
     return tuple(new_word) 
-               
-        
+
 
 def train_bpe (
     input_path: str | os.PathLike,
@@ -87,30 +86,58 @@ def train_bpe (
     #print ("freq",freq)
 
     # 基于freq表，计算每个字符组合出现的次数
+    
+    pair_count = {}
+    pair_2_word = {}
+    for words, count in freq_dict.items() :
+        for i in range(len(words)-1):
+            pair = (words[i],words[i+1]) 
+            pair_count[pair] = pair_count.get(pair,0) + count
+            pair_2_word.setdefault(pair, set()).add(words) 
 
     while len(vocab) < vocab_size:
-        pair_count = {}
-        for words, count in freq_dict.items() :
-            for i in range(len(words)-1):
-                pair = (words[i],words[i+1])
-                pair_count[pair] = pair_count.get(pair,0) + count
+        new_vocab = max(pair_count, key=lambda p : (pair_count[p],p))
+        vocab[len(vocab)] = new_vocab[0]+new_vocab[1]
+        merges.append(new_vocab)
 
-        new_token = max(pair_count, key=lambda p : (pair_count[p],p))
+        for old_word in list(pair_2_word[new_vocab]) :
+            # 首先这里有了一个new_word
+            new_word = make_a_new_word(old_word,new_vocab)
+            old_count = freq_dict[old_word]
+
+            # 这里计算老的pair，把所有的数据都删了
+            for i in range(len(old_word)-1):
+                old_pair = (old_word[i],old_word[i+1]) 
+                pair_count[old_pair] = pair_count.get(old_pair,0) - old_count
+                pair_2_word[old_pair].discard(old_word)
+
+            # 这里要计算新的pair有哪些
+            for i in range(len(new_word)-1):
+                new_pair = (new_word[i],new_word[i+1]) 
+                # 这里只要新的pair，所以pair_count里面有值的不加
+                pair_count[new_pair] = pair_count.get(new_pair,0) + old_count
+                pair_2_word.setdefault(new_pair, set()).add(new_word) 
+
+            freq_dict[new_word] = freq_dict[old_word]
+            del freq_dict[old_word]
         
-        vocab[len(vocab)] = new_token[0]+new_token[1]
-        merges.append(new_token)
+
+
+
+
+
 
         #重建freq_dict
-        new_freq_dict = {}
-        for words, count in freq_dict.items():
-            #print(words,new_token)
-            if is_best_pair_matched(words,new_token) :
-                new_word = make_a_new_word(words,new_token)
-                #print(new_word)
-                new_freq_dict [new_word] = count
-            else :
-                new_freq_dict[words] = count
-        freq_dict = new_freq_dict
+        # new_freq_dict = {}
+        # for words, count in freq_dict.items():
+        #     #print(words,new_token)
+        #     if words in pair_2_word[new_token] :
+        #         new_word = make_a_new_word(words,new_token)
+        #         #print(new_word)
+        #         new_freq_dict [new_word] = count
+        #     else :
+        #         new_freq_dict[words] = count
+        # freq_dict = new_freq_dict
 
 
     #print(vocab,merges)
