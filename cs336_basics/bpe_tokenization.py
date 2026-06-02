@@ -56,6 +56,7 @@ def worker(task) :
                 bytes_token = token.encode('utf-8')
                 words = tuple(bytes([x]) for x in bytes_token)
                 freq_dict[words] = freq_dict.get(words,0) + 1
+
     return freq_dict
 
 def train_bpe (
@@ -65,8 +66,6 @@ def train_bpe (
     **kwargs,
 ) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
     # print("train_bpe 111111", input_path, vocab_size, special_tokens, **kwargs)
-    
-    
 
     vocab = {}
     for i in range(256) :
@@ -77,32 +76,10 @@ def train_bpe (
     freq_dict_list = []
     freq_dict = {}
     merges = []
-    # with open(input_path,"rb") as f :
-    #     text = f.read()
-    #     flag = re.escape(special_tokens[0])
-    #     chunks = re.split(flag.encode("utf-8"),text)
-    
+
     with open(input_path, "rb") as f:
         num_processes = 8
         boundaries = find_chunk_boundaries(f, num_processes, b"<|endoftext|>")
-
-        # The following is a serial implementation, but you can parallelize this
-        # by sending each start/end pair to a set of processes.
-        # for start, end in zip(boundaries[:-1], boundaries[1:]):
-        #     f.seek(start)
-        #     text = f.read(end - start)
-        #     flag = re.escape(special_tokens[0])
-        #     chunks = re.split(flag.encode("utf-8"),text)
-
-        #     for chunk in chunks :
-        #         str_chunk = chunk.decode("utf-8")
-
-        #         tokens_of_one_chunk = re.findall(PAT,str_chunk)
-            
-        #         for token in tokens_of_one_chunk:
-        #             bytes_token = token.encode('utf-8')
-        #             words = tuple(bytes([x]) for x in bytes_token)
-        #             freq_dict[words] = freq_dict.get(words,0) + 1
 
         task_list=[]
         for start, end in zip(boundaries[:-1], boundaries[1:]):
@@ -158,26 +135,105 @@ def train_bpe (
 
             freq_dict[new_word] = freq_dict[old_word]
             del freq_dict[old_word]
-        
-
-
-
-
-
-
-        #重建freq_dict
-        # new_freq_dict = {}
-        # for words, count in freq_dict.items():
-        #     #print(words,new_token)
-        #     if words in pair_2_word[new_token] :
-        #         new_word = make_a_new_word(words,new_token)
-        #         #print(new_word)
-        #         new_freq_dict [new_word] = count
-        #     else :
-        #         new_freq_dict[words] = count
-        # freq_dict = new_freq_dict
-
-
-    #print(vocab,merges)
     
     return vocab,merges
+
+
+class bpe_tokenizer:
+    def __init__(self, vocab, merges, special_tokens=None): 
+        self.id_to_token = vocab
+        self.token_to_id = {v: k for k, v in vocab.items()}
+        # print("token_to_id",self.token_to_id[b"Hello"])
+        # print("id_to_token",self.id_to_token[15496])
+        self.merges = merges
+        self.pair_rank_in_merges = dict()
+        for i, (k, v) in enumerate(self.merges):
+            #print("第", i, "个 merge: k", k, "v", v)
+            self.pair_rank_in_merges[(k, v)] = i
+        #print("pair_2_merges",self.pair_2_merges[b"He"])
+        
+        self.special_tokens = special_tokens
+        #print("bpe_tokenizer",len(self.id_to_token),len(self.merges))
+
+    def encode(self, text) -> list[int]: 
+        #print("encode",text)
+        if self.special_tokens is not None and len(self.special_tokens) > 0:
+            # for special_token in self.special_tokens:
+            #     flag = "("+re.escape(special_token)+")"
+            #     chunks = re.split(flag,text)
+
+            # 按照长度从大到小排序，这样会先匹配长的，再匹配短的，避免短的被长的匹配了
+            # 比如<|endoftext|>和<|endoftext|>,如果先匹配短的，就会把<|endoftext|>匹配成<|endoftext|><|endoftext|>
+            specials = sorted(self.special_tokens, key=len, reverse=True)
+            flag = "(" + "|".join(re.escape(s) for s in specials) + ")"
+            chunks = re.split(flag, text)
+        else:
+            chunks = [text]
+
+        #print("chunks",chunks)
+        # assert(0)
+        words = list()
+
+        for chunk in chunks:
+            #print("chunk",chunk)
+            pre_tokens = list()
+           
+            if self.special_tokens is not None and chunk in self.special_tokens:
+                #print("special chunk",chunk)
+                words.append(self.token_to_id[chunk.encode('utf-8')])
+                continue
+
+            tokens = re.findall(PAT,chunk)
+
+            for token in tokens:
+                pre_tokens.append(tuple(bytes([x]) for x in token.encode('utf-8')))
+            
+            for pre_token in pre_tokens:
+                words.extend(self._encode_one_token(pre_token))   
+        
+        #print("words",words)
+        return words
+
+    def _encode_one_token(self, token) -> list[int]:
+            current_token = token
+            words = []
+            while True:
+                #print("current_token",current_token)
+                ranks = {}
+                i = 0
+                while i < len(current_token)-1:
+                    pair = (current_token[i],current_token[i+1])
+                    if pair in self.pair_rank_in_merges:
+                        ranks[pair] = self.pair_rank_in_merges[pair]
+                    
+                    i=i+1
+
+                if (len(ranks) == 0): 
+                    for tok in current_token:
+                        words.append(self.token_to_id[tok])
+                    break
+                else :
+                    best_pair = min(ranks, key=ranks.get)
+                    #print("best_pair",best_pair)
+
+                    new_token = make_a_new_word(current_token,best_pair)
+                   # print("new_token",new_token)
+
+                    current_token = new_token
+            return words
+                    
+    def decode(self, tokens) -> str:
+        #print("decode",tokens)
+
+        all_bytes = []
+        for token in tokens:
+            all_bytes.append(self.id_to_token[token])
+
+       # print("all_bytes",all_bytes)
+        return b"".join(all_bytes).decode("utf-8",errors="replace")
+   
+    def encode_iterable(self, iterable) -> list[int]:   
+        for line in iterable:
+            for id in self.encode(line):
+                yield id
+
