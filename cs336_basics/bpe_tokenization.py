@@ -3,6 +3,8 @@ import os
 import regex as re
 from .pretokenization_example import find_chunk_boundaries
 from multiprocessing import Pool
+import pickle
+import numpy as np
 
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
@@ -143,17 +145,13 @@ class bpe_tokenizer:
     def __init__(self, vocab, merges, special_tokens=None): 
         self.id_to_token = vocab
         self.token_to_id = {v: k for k, v in vocab.items()}
-        # print("token_to_id",self.token_to_id[b"Hello"])
-        # print("id_to_token",self.id_to_token[15496])
         self.merges = merges
         self.pair_rank_in_merges = dict()
-        for i, (k, v) in enumerate(self.merges):
-            #print("第", i, "个 merge: k", k, "v", v)
+        for i, (k, v) in enumerate(self.merges): 
             self.pair_rank_in_merges[(k, v)] = i
-        #print("pair_2_merges",self.pair_2_merges[b"He"])
-        
+       
         self.special_tokens = special_tokens
-        #print("bpe_tokenizer",len(self.id_to_token),len(self.merges))
+
 
     def encode(self, text) -> list[int]: 
         #print("encode",text)
@@ -237,3 +235,21 @@ class bpe_tokenizer:
             for id in self.encode(line):
                 yield id
 
+    def save_to_npy_file(self, file_path, output_path) :
+        # print("save_to_npy_file",output_path)
+        with open(file_path, "r") as f:
+            ids = np.fromiter(self.encode_iterable(f), dtype=np.uint16)
+        np.save(output_path, ids)
+
+    @classmethod
+    def from_file(cls, file_path, special_tokens=None) :
+        print("from_file",file_path,special_tokens)
+        
+        with open(file_path, "rb") as f:
+            vocab, merges = pickle.load(f)
+        # print("vocab",len(vocab))
+        # print("merges",len(merges))
+        # tokens = [token for id, token in vocab.items() if id > 256]
+        # long_vocab = max(tokens, key=len)    
+        # print("long_vocab",long_vocab)
+        return cls(vocab, merges, special_tokens)
